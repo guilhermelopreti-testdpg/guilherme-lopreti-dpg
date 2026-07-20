@@ -25,6 +25,34 @@ EF Core com Npgsql em vez de SQL na mão. Pesou ter as migrations versionadas ju
 assim quem clonar cria o schema do zero com um comando. Na query do relatório vou garantir que a
 agregação aconteça no banco, não em memória.
 
+## Timestamps
+
+O contrato usa `DateTimeOffset` e não `DateTime` para o horário da coleta. `DateTime` guarda a
+data e a hora mas não guarda o fuso, guarda só uma flag `Kind` dizendo se é UTC ou local, e essa
+flag não sobrevive de forma confiável à ida e volta em JSON. O valor chega certo mas o
+significado se perde. `DateTimeOffset` serializa o deslocamento junto, como
+`2026-07-20T14:30:00+00:00`, então não sobra ambiguidade para a API interpretar.
+
+Tem um detalhe do Npgsql que reforça a escolha, da versão 6 em diante ele lança exceção se você
+tentar gravar num `timestamptz` um `DateTime` que não esteja marcado como UTC. Usando
+`DateTimeOffset` sempre com offset zero, isso não acontece.
+
+Separei também o horário da coleta do horário de recebimento. O primeiro é carimbado pelo
+agente, porque é quando o evento aconteceu de fato, e o segundo pela API. Os dois precisam
+existir porque o relógio da máquina do agente pode estar errado, e porque com a fila local uma
+amostra pode ser coletada bem antes de conseguir ser entregue.
+
+## Contratos separados da entidade
+
+O projeto de contratos tem um record de request e outro de response, e nenhum dos dois é a
+entidade que o EF Core vai mapear. A diferença prática são os campos que o servidor controla, o
+agente não manda `Id` nem `ReceivedAtUtc`. Além disso, mudança interna no banco não deveria
+vazar automaticamente para o formato que o agente consome.
+
+Usei `record` em vez de `class` porque DTO é um pacote de dados, não tem comportamento. Record
+já vem com igualdade por valor, que vai simplificar os testes da fila, e com as propriedades
+imutáveis depois de criadas.
+
 ## Postgres no Docker
 
 Volume nomeado em vez de bind mount, porque com bind mount os arquivos internos do banco cairiam
