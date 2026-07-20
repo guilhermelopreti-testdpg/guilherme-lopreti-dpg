@@ -59,6 +59,54 @@ Usei `record` em vez de `class` porque DTO é um pacote de dados, não tem compo
 já vem com igualdade por valor, que vai simplificar os testes da fila, e com as propriedades
 imutáveis depois de criadas.
 
+## Agente
+
+Usei o template de worker service em vez de console puro. Os dois geram um executável de
+console, mas o worker já vem com o Generic Host, que traz injeção de dependência, a mesma
+cascata de configuração da API e logging estruturado. Também trata `Ctrl+C` cancelando o
+`CancellationToken`, então o agente encerra sem cortar um envio pela metade.
+
+A coleta fica atrás da interface `IActivityCollector`, e ela devolve só o título da janela.
+Hostname, usuário e horário ficam de fora de propósito, porque o .NET resolve os três igual em
+qualquer plataforma. Deixando só o que é realmente específico de sistema operacional, portar
+para outra plataforma vira escrever um método, não uma classe inteira.
+
+A escolha da implementação acontece no `Program.cs`, não dentro do worker. O worker só conhece
+a interface. Se o agente for iniciado fora do Windows ele para na hora com uma mensagem
+explicando o motivo, o que prefiro a falhar silenciosamente mais tarde.
+
+O laço usa `PeriodicTimer` em vez de `Task.Delay`. Com `Task.Delay` o intervalo real vira cinco
+segundos mais o tempo da coleta e do envio, então o ritmo escorrega ao longo da execução. O
+`PeriodicTimer` dispara em intervalo fixo.
+
+O cliente HTTP é registrado com `AddHttpClient` em vez de instanciado na mão. Criar um
+`HttpClient` novo a cada envio deixaria conexões em `TIME_WAIT` e acabaria esgotando as portas
+do sistema, que é um problema que só aparece depois de horas rodando.
+
+O `try/catch` fica dentro do laço, não em volta dele. É isso que faz a API fora do ar não
+derrubar o agente. Nesta etapa a amostra daquele momento ainda é perdida, o que a fila local
+resolve depois.
+
+## Coleta em Linux e macOS
+
+Não implementei, mas o desenho já está preparado, seria uma nova classe implementando
+`IActivityCollector` e uma linha diferente no `Program.cs`.
+
+No **Linux** depende do servidor gráfico. No X11 dá para ler a propriedade `_NET_ACTIVE_WINDOW`
+da janela raiz para descobrir a janela em foco e depois `_NET_WM_NAME` para o título, seja
+chamando `libX11` por P/Invoke, seja executando `xprop` e lendo a saída. No Wayland isso não
+existe de forma geral, e não é omissão, é decisão de segurança do protocolo, uma aplicação não
+enxerga as janelas das outras. Cada compositor resolve do seu jeito, no GNOME seria uma
+extensão do Shell exposta por D-Bus, no KDE seria script do KWin. Ou seja, no Wayland a resposta
+honesta é que não tem solução portável, e eu documentaria a limitação em vez de fingir que tem.
+
+No **macOS** o caminho é o `NSWorkspace`, cuja propriedade `frontmostApplication` dá o
+aplicativo em primeiro plano com facilidade. Pegar o **título da janela** é mais chato, exige
+`CGWindowListCopyWindowInfo` ou a API de acessibilidade, e desde o Catalina ler título de janela
+de outro aplicativo depende de permissão concedida pelo usuário nas preferências do sistema.
+Então lá o agente teria que lidar com o caso de a permissão não ter sido dada, provavelmente
+caindo para só o nome do aplicativo.
+
 ## API
 
 Usei Minimal APIs em vez de Controllers. Para três endpoints, fica mais direto e simples, e dá para ler a API inteira de uma vez. Para não cair no problema clássico

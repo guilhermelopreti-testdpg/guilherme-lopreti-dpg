@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniMonitor.Contracts", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniMonitor.Api", "src\MiniMonitor.Api\MiniMonitor.Api.csproj", "{BE5AE91A-4102-4906-BE1F-1F392E22F679}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniMonitor.Agent", "src\MiniMonitor.Agent\MiniMonitor.Agent.csproj", "{D1D4E70C-48BE-486F-9353-B3BDED231522}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,9 +28,14 @@ Global
 		{BE5AE91A-4102-4906-BE1F-1F392E22F679}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BE5AE91A-4102-4906-BE1F-1F392E22F679}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BE5AE91A-4102-4906-BE1F-1F392E22F679}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D1D4E70C-48BE-486F-9353-B3BDED231522}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D1D4E70C-48BE-486F-9353-B3BDED231522}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D1D4E70C-48BE-486F-9353-B3BDED231522}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D1D4E70C-48BE-486F-9353-B3BDED231522}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{6CEB8D09-1B66-43E0-8473-1EE1451E2909} = {AF0D584B-A982-49EE-97B0-97C4A673C29D}
 		{BE5AE91A-4102-4906-BE1F-1F392E22F679} = {AF0D584B-A982-49EE-97B0-97C4A673C29D}
+		{D1D4E70C-48BE-486F-9353-B3BDED231522} = {AF0D584B-A982-49EE-97B0-97C4A673C29D}
 	EndGlobalSection
 EndGlobal
