@@ -1,6 +1,31 @@
-@MiniMonitor.Api_HostAddress = http://localhost:5057
+@MiniMonitor.Api_HostAddress = http://localhost:5080
 
-GET {{MiniMonitor.Api_HostAddress}}/weatherforecast/
+### Ingestão de uma amostra
+POST {{MiniMonitor.Api_HostAddress}}/api/samples
+Content-Type: application/json
+
+{
+  "hostname": "PC-TESTE",
+  "username": "guilherme",
+  "capturedAtUtc": "2026-07-20T15:30:00+00:00",
+  "windowTitle": "Visual Studio Code"
+}
+
+### Leitura das amostras mais recentes
+GET {{MiniMonitor.Api_HostAddress}}/api/samples
 Accept: application/json
 
-###
+### Leitura filtrando por máquina, com paginação
+GET {{MiniMonitor.Api_HostAddress}}/api/samples?hostname=PC-TESTE&limit=10&offset=0
+Accept: application/json
+
+### Amostra inválida, deve responder 400 com os erros de validação
+POST {{MiniMonitor.Api_HostAddress}}/api/samples
+Content-Type: application/json
+
+{
+  "hostname": "",
+  "username": "",
+  "capturedAtUtc": "2026-07-20T15:30:00+00:00",
+  "windowTitle": "Janela qualquer"
+}

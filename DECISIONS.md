@@ -42,6 +42,12 @@ agente, porque é quando o evento aconteceu de fato, e o segundo pela API. Os do
 existir porque o relógio da máquina do agente pode estar errado, e porque com a fila local uma
 amostra pode ser coletada bem antes de conseguir ser entregue.
 
+Na ingestão a API ainda chama `ToUniversalTime()` no horário recebido, em vez de confiar que o
+cliente mandou em UTC. O agente manda certo, mas uma chamada feita pelo Swagger ou pelo curl
+pode vir com fuso local, e aí o Npgsql recusaria gravar. Testei mandando
+`2026-07-20T12:30:00-03:00` e o registro gravado ficou `2026-07-20T15:30:00+00:00`, mesmo
+instante, normalizado.
+
 ## Contratos separados da entidade
 
 O projeto de contratos tem um record de request e outro de response, e nenhum dos dois é a
@@ -52,6 +58,27 @@ vazar automaticamente para o formato que o agente consome.
 Usei `record` em vez de `class` porque DTO é um pacote de dados, não tem comportamento. Record
 já vem com igualdade por valor, que vai simplificar os testes da fila, e com as propriedades
 imutáveis depois de criadas.
+
+## API
+
+Usei Minimal APIs em vez de Controllers. Para três endpoints, fica mais direto e simples, e dá para ler a API inteira de uma vez. Para não cair no problema clássico
+de inchar o `Program.cs`, os endpoints ficam num método de extensão em arquivo separado, e o
+`Program.cs` só chama ele. Se a API crescesse muito eu migraria para Controllers, o que não é
+muito complexo porque a lógica de dentro do handler é a mesma.
+
+A leitura tem paginação com teto de 200 itens. Sem isso o endpoint funcionaria bem em
+desenvolvimento e derrubaria a aplicação quando a tabela crescesse.
+
+As migrations são aplicadas no startup da API. Isso deixa o projeto rodar com um comando só
+depois de subir o Postgres, que é o que quero para quem for avaliar. Em produção seria errado,
+duas instâncias subindo juntas competiriam pelo schema e ninguém revisaria a alteração antes
+dela acontecer, então lá isso viraria um passo separado do deploy.
+
+Deixei a API em HTTP puro, sem HTTPS. Como tudo roda local, o certificado autoassinado de
+desenvolvimento só criaria atrito, o agente recusaria a conexão por certificado não confiável e
+seria preciso rodar `dotnet dev-certs https --trust` antes. A porta está fixada em 5080 no
+`launchSettings.json`, que por isso vai versionado, senão o README apontaria para uma porta
+sorteada na criação do projeto.
 
 ## Postgres no Docker
 

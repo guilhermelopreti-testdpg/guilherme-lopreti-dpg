@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MiniMonitor.Api.Data;
+using MiniMonitor.Api.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,5 +31,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+app.MapSampleEndpoints();
 
 app.Run();
