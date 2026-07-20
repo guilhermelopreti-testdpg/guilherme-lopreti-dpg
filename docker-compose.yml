@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: minimonitor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-minimonitor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minimonitor}
+      POSTGRES_DB: ${POSTGRES_DB:-minimonitor}
+      # Garante que o cluster seja criado em UTC, para o banco nunca aplicar
+      # conversão de fuso por conta própria nas colunas timestamptz.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # "Up" não significa banco pronto, o pg_isready só responde OK quando o
+      # Postgres realmente aceita conexão.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-minimonitor} -d ${POSTGRES_DB:-minimonitor}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
