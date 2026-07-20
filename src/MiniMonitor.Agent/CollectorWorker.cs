@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using MiniMonitor.Agent.Collectors;
+using MiniMonitor.Agent.Queueing;
 using MiniMonitor.Agent.Sending;
 using MiniMonitor.Contracts;
 
@@ -7,6 +8,7 @@ namespace MiniMonitor.Agent;
 
 public class CollectorWorker(
     IActivityCollector collector,
+    ISampleQueue queue,
     MiniMonitorApiClient apiClient,
     IOptions<AgentOptions> options,
     ILogger<CollectorWorker> logger) : BackgroundService
@@ -15,11 +17,14 @@ public class CollectorWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var pending = await queue.CountAsync(stoppingToken);
+
         logger.LogInformation(
-            "Agente iniciado em {Hostname}. Coletando a cada {Interval}s e enviando para {ApiBaseUrl}.",
+            "Agente iniciado em {Hostname}. Coletando a cada {Interval}s, enviando para {ApiBaseUrl}. Fila local com {Pending} amostras pendentes.",
             Environment.MachineName,
             _options.IntervalSeconds,
-            _options.ApiBaseUrl);
+            _options.ApiBaseUrl,
+            pending);
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_options.IntervalSeconds));
 
@@ -27,7 +32,8 @@ public class CollectorWorker(
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                await CollectAndSendAsync(stoppingToken);
+                await CollectAsync(stoppingToken);
+                await DrainAsync(stoppingToken);
             }
         }
         catch (OperationCanceledException)
@@ -38,7 +44,7 @@ public class CollectorWorker(
         logger.LogInformation("Agente encerrado.");
     }
 
-    private async Task CollectAndSendAsync(CancellationToken cancellationToken)
+    private async Task CollectAsync(CancellationToken cancellationToken)
     {
         var windowTitle = collector.GetForegroundWindowTitle();
 
@@ -56,25 +62,50 @@ public class CollectorWorker(
             CapturedAtUtc: DateTimeOffset.UtcNow,
             WindowTitle: windowTitle);
 
-        try
+        // Grava antes de tentar enviar. Se fosse o contrário, uma queda entre a
+        // coleta e o envio perderia a amostra.
+        await queue.EnqueueAsync(sample, cancellationToken);
+    }
+
+    private async Task DrainAsync(CancellationToken cancellationToken)
+    {
+        var batch = await queue.PeekAsync(_options.DrainBatchSize, cancellationToken);
+        if (batch.Count == 0)
         {
-            await apiClient.SendAsync(sample, cancellationToken);
-            logger.LogInformation("Amostra enviada: {WindowTitle}", windowTitle);
+            return;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+        var sent = 0;
+
+        foreach (var sample in batch)
         {
-            throw;
+            try
+            {
+                await apiClient.SendAsync(sample, cancellationToken);
+                sent++;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // Para no primeiro erro para não furar a ordem da fila. O que
+                // já foi enviado é confirmado abaixo, o resto fica para o
+                // próximo ciclo.
+                logger.LogWarning(
+                    "Falha ao enviar amostra para a API ({Motivo}). {Pending} amostras seguem na fila local.",
+                    ex.Message,
+                    batch.Count - sent);
+                break;
+            }
         }
-        catch (Exception ex)
+
+        if (sent > 0)
         {
-            // A falha é registrada e o laço continua. O agente nunca cai por
-            // causa da API. Neste passo a amostra é perdida, o que a fila
-            // local do próximo passo resolve.
-            //
-            // Loga só a mensagem, não a exceção inteira. Com a API fora isso
-            // aconteceria a cada coleta, e a pilha de chamadas de um erro de
-            // conexão não acrescenta nada além de poluir o log.
-            logger.LogWarning("Falha ao enviar amostra para a API ({Motivo}), seguindo em frente.", ex.Message);
+            // Só remove do disco depois da confirmação da API.
+            await queue.AcknowledgeAsync(sent, cancellationToken);
+            logger.LogInformation("{Sent} amostra(s) enviada(s) e removida(s) da fila local.", sent);
         }
     }
 }

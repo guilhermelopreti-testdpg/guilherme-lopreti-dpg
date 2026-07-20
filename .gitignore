@@ -482,3 +482,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Mini-Monitor: fila local do agente, dado de execução e não código
+queue/
+*.jsonl

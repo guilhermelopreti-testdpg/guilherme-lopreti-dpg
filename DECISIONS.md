@@ -87,6 +87,41 @@ O `try/catch` fica dentro do laço, não em volta dele. É isso que faz a API fo
 derrubar o agente. Nesta etapa a amostra daquele momento ainda é perdida, o que a fila local
 resolve depois.
 
+## Fila local do agente
+
+A fila é um arquivo em disco, no formato JSON Lines, e não uma lista em memória. Fila em
+memória resolveria a API cair, mas não o agente ser fechado ou a máquina reiniciar, e o
+requisito é não perder dado. JSON Lines porque dá para acrescentar no fim sem reescrever o
+arquivo, o que um array JSON exigiria a cada amostra.
+
+A amostra é gravada antes de qualquer tentativa de envio, e só sai do arquivo depois da
+resposta de sucesso da API. Isso dá entrega pelo menos uma vez, se o agente morrer entre a
+resposta e a remoção da linha, aquela amostra é reenviada e vira duplicata. Remover antes de
+enviar trocaria duplicata por perda, e num monitor contagem levemente inflada incomoda bem menos
+que buraco no histórico, então preferi assim.
+
+O envio para no primeiro erro do lote. As amostras que já passaram são confirmadas e o resto
+fica para o próximo ciclo, o que preserva a ordem cronológica. Insistir nas seguintes não faria
+sentido, se a API caiu ela caiu para todas.
+
+A remoção reescreve o arquivo num temporário e move por cima. Reescrevendo direto, uma queda no
+meio deixaria o arquivo pela metade e levaria a fila inteira junto, justamente no momento de
+falha.
+
+A fila tem teto de dez mil amostras. Com a API fora por dias o arquivo cresceria até encher o
+disco, o que é pior do que perder amostra. Ao estourar, descarta as mais antigas, porque num
+monitor o dado recente vale mais.
+
+Testei o cenário completo: subi o agente sem a API, deixei a fila acumular, matei o agente,
+subi a API e reabri o agente. As amostras represadas chegaram, e dá para ver isso nos próprios
+dados, elas têm trinta e cinco segundos de diferença entre o horário de coleta e o de
+recebimento, enquanto as coletadas depois têm quarenta milissegundos.
+
+Duas coisas que faria com mais tempo. O agente envia uma requisição por amostra, então drenar
+uma fila grande são milhares de chamadas, e o certo seria um endpoint de ingestão em lote. E
+hoje ele tenta a cada cinco segundos indefinidamente com a API fora, onde um backoff exponencial
+com teto pouparia recurso dos dois lados.
+
 ## Coleta em Linux e macOS
 
 Não implementei, mas o desenho já está preparado, seria uma nova classe implementando

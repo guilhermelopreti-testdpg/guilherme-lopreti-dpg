@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using MiniMonitor.Agent;
 using MiniMonitor.Agent.Collectors;
+using MiniMonitor.Agent.Queueing;
 using MiniMonitor.Agent.Sending;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -23,6 +24,8 @@ else
     throw new PlatformNotSupportedException(
         "Só existe implementação de coleta para Windows. Veja o DECISIONS.md para o plano de Linux e macOS.");
 }
+
+builder.Services.AddSingleton<ISampleQueue, FileSampleQueue>();
 
 builder.Services.AddHttpClient<MiniMonitorApiClient>((serviceProvider, client) =>
 {
