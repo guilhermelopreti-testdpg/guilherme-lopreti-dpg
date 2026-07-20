@@ -1,0 +1,6 @@
+@MiniMonitor.Api_HostAddress = http://localhost:5057
+
+GET {{MiniMonitor.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
