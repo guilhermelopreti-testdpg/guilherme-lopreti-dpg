@@ -1,13 +1,13 @@
 # Decisões
 
-Anotações do que decidi ao longo do desafio e por quê, escritas conforme desenvolvo.
+Anotações do que decidi e por quê, escritas conforme desenvolvi.
 
 ## Organização do repositório
 
 Repositório único com uma solution, em vez de separar agente e API. Os dois precisam concordar
 sobre o formato do JSON trocado entre eles, e separados eu teria que publicar esse contrato num
-feed NuGet só para o agente consumir. Num repositório só, o contrato vira um projeto
-compartilhado e o compilador reclama se eu mudar um campo de um lado e esquecer do outro.
+feed NuGet só para o agente consumir. Junto, o contrato vira um projeto compartilhado e o
+compilador reclama se eu mudar um campo de um lado e esquecer do outro.
 
 A divisão em `src/` e `tests/` segue a convenção dos repositórios oficiais do .NET. Não apliquei
 arquitetura formal, o critério foi um projeto por executável, mais o de contratos que os dois
@@ -19,209 +19,223 @@ Título da janela ativa em vez da lista de processos. Gera um registro por amost
 agregação mais direta, e depende de API específica do sistema operacional, então me obriga a
 isolar essa parte atrás de uma interface.
 
-## Banco de dados
-
-EF Core com Npgsql em vez de SQL na mão. Pesou ter as migrations versionadas junto do código,
-assim quem clonar cria o schema do zero com um comando. Na query do relatório vou garantir que a
-agregação aconteça no banco, não em memória.
-
 ## Timestamps
 
-O contrato usa `DateTimeOffset` e não `DateTime` para o horário da coleta. `DateTime` guarda a
-data e a hora mas não guarda o fuso, guarda só uma flag `Kind` dizendo se é UTC ou local, e essa
-flag não sobrevive de forma confiável à ida e volta em JSON. O valor chega certo mas o
-significado se perde. `DateTimeOffset` serializa o deslocamento junto, como
-`2026-07-20T14:30:00+00:00`, então não sobra ambiguidade para a API interpretar.
+O contrato usa `DateTimeOffset` e não `DateTime`. `DateTime` guarda data e hora mas não guarda o
+fuso, guarda só uma flag `Kind`, e essa flag não sobrevive de forma confiável à ida e volta em
+JSON, então o valor chega certo mas o significado se perde. `DateTimeOffset` serializa o
+deslocamento junto, como `2026-07-20T14:30:00+00:00`, e não sobra ambiguidade. Isso ainda casa
+com o Npgsql, que da versão 6 em diante recusa gravar num `timestamptz` um `DateTime` que não
+esteja marcado como UTC.
 
-Tem um detalhe do Npgsql que reforça a escolha, da versão 6 em diante ele lança exceção se você
-tentar gravar num `timestamptz` um `DateTime` que não esteja marcado como UTC. Usando
-`DateTimeOffset` sempre com offset zero, isso não acontece.
+Tudo é gravado em UTC, de propósito. Um registro das 18:30 UTC são 15:30 aqui no Brasil, e é o
+mesmo instante. Guardar o horário local de cada máquina quebraria a comparação entre máquinas em
+fusos diferentes e criaria registros ambíguos no horário de verão. Converter para o fuso de quem
+está lendo é responsabilidade da apresentação, não do armazenamento.
 
-Separei também o horário da coleta do horário de recebimento. O primeiro é carimbado pelo
-agente, porque é quando o evento aconteceu de fato, e o segundo pela API. Os dois precisam
-existir porque o relógio da máquina do agente pode estar errado, e porque com a fila local uma
-amostra pode ser coletada bem antes de conseguir ser entregue.
+Separei o horário da coleta do horário de recebimento. O primeiro é carimbado pelo agente,
+porque é quando o evento aconteceu, o segundo pela API. Os dois precisam existir porque o relógio
+da máquina do agente pode estar errado, e porque com a fila local uma amostra pode ser coletada
+bem antes de conseguir ser entregue.
 
-Na ingestão a API ainda chama `ToUniversalTime()` no horário recebido, em vez de confiar que o
-cliente mandou em UTC. O agente manda certo, mas uma chamada feita pelo Swagger ou pelo curl
-pode vir com fuso local, e aí o Npgsql recusaria gravar. Testei mandando
-`2026-07-20T12:30:00-03:00` e o registro gravado ficou `2026-07-20T15:30:00+00:00`, mesmo
-instante, normalizado.
+Na ingestão a API chama `ToUniversalTime()` em vez de confiar que o cliente mandou em UTC. O
+agente manda certo, mas uma chamada pelo Swagger pode vir com fuso local. Testei mandando
+`2026-07-20T12:30:00-03:00` e o registro gravado ficou `2026-07-20T15:30:00+00:00`.
 
 ## Contratos separados da entidade
 
 O projeto de contratos tem um record de request e outro de response, e nenhum dos dois é a
-entidade que o EF Core vai mapear. A diferença prática são os campos que o servidor controla, o
-agente não manda `Id` nem `ReceivedAtUtc`. Além disso, mudança interna no banco não deveria
-vazar automaticamente para o formato que o agente consome.
+entidade que o EF Core mapeia. A diferença prática são os campos que o servidor controla, o
+agente não manda `Id` nem `ReceivedAtUtc`, e mudança interna no banco não deveria vazar para o
+formato que o agente consome.
 
-Usei `record` em vez de `class` porque DTO é um pacote de dados, não tem comportamento. Record
-já vem com igualdade por valor, que vai simplificar os testes da fila, e com as propriedades
-imutáveis depois de criadas.
+Usei `record` porque DTO é um pacote de dados, sem comportamento. Vem com igualdade por valor,
+que simplificou os testes da fila, e com propriedades imutáveis depois de criadas. A entidade,
+ao contrário, é `class` com propriedades graváveis, porque o EF precisa criar o objeto vazio e
+preencher.
 
 ## Agente
 
-Usei o template de worker service em vez de console puro. Os dois geram um executável de
-console, mas o worker já vem com o Generic Host, que traz injeção de dependência, a mesma
-cascata de configuração da API e logging estruturado. Também trata `Ctrl+C` cancelando o
-`CancellationToken`, então o agente encerra sem cortar um envio pela metade.
+Template de worker service em vez de console puro. Os dois geram um executável de console, mas o
+worker já vem com o Generic Host, que traz injeção de dependência, a mesma cascata de
+configuração da API e logging estruturado, além de tratar `Ctrl+C` cancelando o
+`CancellationToken`.
 
-A coleta fica atrás da interface `IActivityCollector`, e ela devolve só o título da janela.
-Hostname, usuário e horário ficam de fora de propósito, porque o .NET resolve os três igual em
-qualquer plataforma. Deixando só o que é realmente específico de sistema operacional, portar
-para outra plataforma vira escrever um método, não uma classe inteira.
+A coleta fica atrás da interface `IActivityCollector`, que devolve só o título da janela.
+Hostname, usuário e horário ficam de fora porque o .NET resolve os três igual em qualquer
+plataforma. Deixando só o que é realmente específico de sistema operacional, portar vira
+escrever um método, não uma classe inteira. A escolha da implementação acontece no `Program.cs`,
+o worker só conhece a interface, e fora do Windows o agente para na inicialização com uma
+mensagem explicando o motivo.
 
-A escolha da implementação acontece no `Program.cs`, não dentro do worker. O worker só conhece
-a interface. Se o agente for iniciado fora do Windows ele para na hora com uma mensagem
-explicando o motivo, o que prefiro a falhar silenciosamente mais tarde.
-
-O laço usa `PeriodicTimer` em vez de `Task.Delay`. Com `Task.Delay` o intervalo real vira cinco
-segundos mais o tempo da coleta e do envio, então o ritmo escorrega ao longo da execução. O
-`PeriodicTimer` dispara em intervalo fixo.
-
-O cliente HTTP é registrado com `AddHttpClient` em vez de instanciado na mão. Criar um
-`HttpClient` novo a cada envio deixaria conexões em `TIME_WAIT` e acabaria esgotando as portas
-do sistema, que é um problema que só aparece depois de horas rodando.
+O laço usa `PeriodicTimer` e não `Task.Delay`, senão o intervalo real viraria cinco segundos mais
+o tempo da coleta e do envio, e o ritmo escorregaria ao longo da execução. O cliente HTTP é
+registrado com `AddHttpClient`, porque criar um `HttpClient` a cada envio deixaria conexões em
+`TIME_WAIT` até esgotar as portas do sistema.
 
 O `try/catch` fica dentro do laço, não em volta dele. É isso que faz a API fora do ar não
-derrubar o agente. Nesta etapa a amostra daquele momento ainda é perdida, o que a fila local
-resolve depois.
+derrubar o agente.
 
 ## Fila local do agente
 
-A fila é um arquivo em disco, no formato JSON Lines, e não uma lista em memória. Fila em
-memória resolveria a API cair, mas não o agente ser fechado ou a máquina reiniciar, e o
-requisito é não perder dado. JSON Lines porque dá para acrescentar no fim sem reescrever o
-arquivo, o que um array JSON exigiria a cada amostra.
+A fila é um arquivo em disco, em JSON Lines, e não uma lista em memória. Memória resolveria a API
+cair, mas não o agente ser fechado ou a máquina reiniciar. JSON Lines porque dá para acrescentar
+no fim sem reescrever o arquivo, o que um array JSON exigiria a cada amostra.
 
-A amostra é gravada antes de qualquer tentativa de envio, e só sai do arquivo depois da
-resposta de sucesso da API. Isso dá entrega pelo menos uma vez, se o agente morrer entre a
-resposta e a remoção da linha, aquela amostra é reenviada e vira duplicata. Remover antes de
-enviar trocaria duplicata por perda, e num monitor contagem levemente inflada incomoda bem menos
-que buraco no histórico, então preferi assim.
+A amostra é gravada antes de qualquer tentativa de envio, e só sai do arquivo depois da resposta
+de sucesso. Isso dá entrega pelo menos uma vez, se o agente morrer entre a resposta e a remoção
+da linha, aquela amostra é reenviada e vira duplicata. Remover antes de enviar trocaria duplicata
+por perda, e num monitor contagem levemente inflada incomoda menos que buraco no histórico.
 
-O envio para no primeiro erro do lote. As amostras que já passaram são confirmadas e o resto
-fica para o próximo ciclo, o que preserva a ordem cronológica. Insistir nas seguintes não faria
-sentido, se a API caiu ela caiu para todas.
+O envio para no primeiro erro do lote, confirmando só o que passou, o que preserva a ordem
+cronológica. Insistir nas seguintes não faria sentido, se a API caiu ela caiu para todas.
 
-A remoção reescreve o arquivo num temporário e move por cima. Reescrevendo direto, uma queda no
-meio deixaria o arquivo pela metade e levaria a fila inteira junto, justamente no momento de
-falha.
+A remoção grava num arquivo temporário e move por cima. Reescrevendo direto, uma queda no meio
+deixaria o arquivo pela metade e levaria a fila inteira junto, justamente no momento de falha.
 
-A fila tem teto de dez mil amostras. Com a API fora por dias o arquivo cresceria até encher o
-disco, o que é pior do que perder amostra. Ao estourar, descarta as mais antigas, porque num
-monitor o dado recente vale mais.
+A fila tem teto de dez mil amostras, senão a API fora por dias encheria o disco, o que é pior do
+que perder amostra. Ao estourar, descarta as mais antigas, porque num monitor o dado recente vale
+mais.
 
-Testei o cenário completo: subi o agente sem a API, deixei a fila acumular, matei o agente,
-subi a API e reabri o agente. As amostras represadas chegaram, e dá para ver isso nos próprios
-dados, elas têm trinta e cinco segundos de diferença entre o horário de coleta e o de
-recebimento, enquanto as coletadas depois têm quarenta milissegundos.
-
-Duas coisas que faria com mais tempo. O agente envia uma requisição por amostra, então drenar
-uma fila grande são milhares de chamadas, e o certo seria um endpoint de ingestão em lote. E
-hoje ele tenta a cada cinco segundos indefinidamente com a API fora, onde um backoff exponencial
-com teto pouparia recurso dos dois lados.
-
-## Coleta em Linux e macOS
-
-Não implementei, mas o desenho já está preparado, seria uma nova classe implementando
-`IActivityCollector` e uma linha diferente no `Program.cs`.
-
-No **Linux** depende do servidor gráfico. No X11 dá para ler a propriedade `_NET_ACTIVE_WINDOW`
-da janela raiz para descobrir a janela em foco e depois `_NET_WM_NAME` para o título, seja
-chamando `libX11` por P/Invoke, seja executando `xprop` e lendo a saída. No Wayland isso não
-existe de forma geral, e não é omissão, é decisão de segurança do protocolo, uma aplicação não
-enxerga as janelas das outras. Cada compositor resolve do seu jeito, no GNOME seria uma
-extensão do Shell exposta por D-Bus, no KDE seria script do KWin. Ou seja, no Wayland a resposta
-honesta é que não tem solução portável, e eu documentaria a limitação em vez de fingir que tem.
-
-No **macOS** o caminho é o `NSWorkspace`, cuja propriedade `frontmostApplication` dá o
-aplicativo em primeiro plano com facilidade. Pegar o **título da janela** é mais chato, exige
-`CGWindowListCopyWindowInfo` ou a API de acessibilidade, e desde o Catalina ler título de janela
-de outro aplicativo depende de permissão concedida pelo usuário nas preferências do sistema.
-Então lá o agente teria que lidar com o caso de a permissão não ter sido dada, provavelmente
-caindo para só o nome do aplicativo.
+Testei o cenário completo, subi o agente sem a API, deixei acumular, matei o agente, subi a API e
+reabri o agente. As represadas chegaram, e dá para ver isso nos próprios dados, elas têm trinta e
+cinco segundos entre coleta e recebimento, enquanto as coletadas depois têm quarenta
+milissegundos.
 
 ## API
 
-Usei Minimal APIs em vez de Controllers. Para três endpoints, fica mais direto e simples, e dá para ler a API inteira de uma vez. Para não cair no problema clássico
-de inchar o `Program.cs`, os endpoints ficam num método de extensão em arquivo separado, e o
-`Program.cs` só chama ele. Se a API crescesse muito eu migraria para Controllers, o que não é
-muito complexo porque a lógica de dentro do handler é a mesma.
+Minimal APIs em vez de Controllers. Para três endpoints fica mais direto, e dá para ler a API
+inteira de uma vez. Para não inchar o `Program.cs`, os endpoints ficam em métodos de extensão em
+arquivos separados. Se crescesse muito eu migraria para Controllers, o que não é traumático
+porque a lógica de dentro do handler é a mesma.
 
-A leitura tem paginação com teto de 200 itens. Sem isso o endpoint funcionaria bem em
+A leitura tem paginação com teto de 200 itens, senão o endpoint funcionaria bem em
 desenvolvimento e derrubaria a aplicação quando a tabela crescesse.
 
-As migrations são aplicadas no startup da API. Isso deixa o projeto rodar com um comando só
-depois de subir o Postgres, que é o que quero para quem for avaliar. Em produção seria errado,
-duas instâncias subindo juntas competiriam pelo schema e ninguém revisaria a alteração antes
-dela acontecer, então lá isso viraria um passo separado do deploy.
+As migrations são aplicadas no startup, o que deixa o projeto rodar com um comando só depois de
+subir o Postgres. Em produção seria errado, duas instâncias subindo juntas competiriam pelo
+schema e ninguém revisaria a alteração antes, então lá viraria um passo separado do deploy.
 
-Deixei a API em HTTP puro, sem HTTPS. Como tudo roda local, o certificado autoassinado de
-desenvolvimento só criaria atrito, o agente recusaria a conexão por certificado não confiável e
-seria preciso rodar `dotnet dev-certs https --trust` antes. A porta está fixada em 5080 no
-`launchSettings.json`, que por isso vai versionado, senão o README apontaria para uma porta
-sorteada na criação do projeto.
+Deixei em HTTP puro. Como tudo roda local, o certificado autoassinado só criaria atrito, o agente
+recusaria a conexão e seria preciso rodar `dotnet dev-certs https --trust` antes. A porta está
+fixada em 5080 no `launchSettings.json`, que por isso vai versionado, senão o README apontaria
+para uma porta sorteada na criação do projeto.
 
 ## Relatório
 
-A pergunta que o relatório responde é em quais janelas cada máquina passou o tempo num
-período. Como o agente coleta em intervalo fixo, contar amostras acaba sendo uma aproximação de
-medir tempo, a duração não é gravada em lugar nenhum, ela sai da contagem.
+Responde em quais janelas cada máquina passou o tempo num período. Como o agente coleta em
+intervalo fixo, contar amostras é uma aproximação de medir tempo, a duração não é gravada em
+lugar nenhum, sai da contagem.
 
-A agregação acontece no banco, com `GROUP BY`, `COUNT`, `MIN` e `MAX`. Materializando cedo demais, a tabela inteira viria para a memória só para ser
-contada. Conferi o SQL gerado nos logs para ter certeza de que o `GROUP BY` chegou no Postgres.
+A agregação acontece no banco, com `GROUP BY`, `COUNT`, `MIN` e `MAX`. Isso importa porque em
+LINQ o jeito certo e o jeito errado são quase idênticos na tela, muda só onde entra o
+`ToListAsync`, e materializar cedo demais traria a tabela inteira para a memória só para contar.
+Conferi o SQL nos logs para ter certeza de que o `GROUP BY` chegou no Postgres.
 
-O total do período vem de uma consulta separada, e não da soma dos itens, porque a lista é
-cortada pelo limite. Com limite 2 os itens somariam 28 num período que tem 35 amostras.
+O período é semiaberto, inclui o início e exclui o fim, senão uma amostra na virada apareceria em
+duas horas seguidas. O total vem de uma consulta separada e não da soma dos itens, porque a lista
+é cortada pelo limite. E a resposta devolve o período efetivamente considerado, senão quem chama
+sem parâmetros não saberia o que a última hora significou.
 
-A resposta devolve o período efetivamente considerado. Sem isso, quem chama sem parâmetros não
-saberia se a última hora significa a hora cheia anterior ou os últimos sessenta minutos.
+O índice ficou só em `captured_at_utc`, único filtro presente em toda consulta do relatório, já
+que o hostname é opcional. Um índice composto com hostname na frente seria melhor para as
+consultas filtradas por máquina e inútil para as que não filtram, porque o Postgres não faz busca
+por faixa eficiente quando a primeira coluna não está restrita. Se a consulta por máquina virasse
+o padrão dominante eu acrescentaria o composto, mas índice tem custo, cada um deixa a escrita mais
+lenta, e aqui a escrita é constante.
 
-O índice ficou só em `captured_at_utc`, que é o único filtro presente em toda consulta do
-relatório, já que o hostname é opcional. Um índice composto com hostname na frente seria melhor
-para as consultas filtradas por máquina e inútil para as que não filtram, porque o Postgres não
-faz busca por faixa eficiente quando a primeira coluna do índice não está restrita. Se a consulta
-por máquina virasse o padrão dominante eu acrescentaria o composto, mas índice tem custo, cada um
-deixa a escrita mais lenta, e aqui a escrita é constante.
+## Testes
+
+Testei a fila local, que é onde mora a lógica autoral e onde um bug seria silencioso. Testar que
+o EF grava no banco testaria a Microsoft, não o meu código.
+
+São oito testes cobrindo as regras que, se quebrassem, quebrariam sem avisar: ordem de chegada,
+leitura não remover nada sem confirmação, confirmação parcial quando a API aceita parte do lote,
+sobreviver ao agente reiniciar, descartar as antigas ao encher, e o horário em UTC sobreviver à
+ida e volta do arquivo. Cada teste usa um arquivo temporário próprio, então não dependem de banco
+nem de API no ar e não interferem entre si.
+
+Para confirmar que os testes têm valor, inverti de propósito a regra de descarte da fila cheia e
+o teste correspondente falhou, como esperado.
+
+## Coleta em Linux e macOS
+
+Não implementei, mas a mudança no projeto seria pequena, porque a única parte que depende do
+sistema operacional está atrás da interface `IActivityCollector`. Seria uma classe nova por
+plataforma e mais um caso no `if` do `Program.cs`, que é onde a implementação é escolhida.
+Nenhum outro arquivo muda.
+
+A parte difícil é o que vai dentro dessas classes, porque cada sistema responde a pergunta "qual
+janela está na frente" de um jeito diferente.
+
+No **Linux** quem gerencia as janelas é o servidor gráfico, e existem duas gerações dele. No
+X11, mais antigo e ainda bem comum, dá para perguntar qual é a janela ativa, e existe até um
+programa de linha de comando pronto para isso, o `xprop`, então a versão mais simples seria
+executá-lo e ler a saída. Já o Wayland, mais novo, de propósito não deixa um programa enxergar as
+janelas dos outros, por segurança. Ali não existe solução que funcione em qualquer ambiente, cada
+desktop resolve do seu jeito, e eu documentaria a limitação em vez de fingir que tem saída.
+
+No **macOS** descobrir qual aplicativo está em primeiro plano é fácil, o sistema expõe isso.
+Descobrir o título da janela é mais chato, porque o macOS trata isso como dado sensível e exige
+que o usuário autorize nas configurações de privacidade. O agente teria que tratar o caso de a
+permissão não ter sido concedida, provavelmente usando só o nome do aplicativo.
+
+Ou seja, as três plataformas não entregam exatamente a mesma informação, o que é um argumento a
+favor de a interface devolver algo simples e opcional, como faz hoje.
 
 ## Postgres no Docker
 
-Volume nomeado em vez de bind mount, porque com bind mount os arquivos internos do banco cairiam
-dentro do repositório e ainda haveria problema de permissão no Windows, já que o Postgres roda
-como outro usuário dentro do container.
+Healthcheck porque o container aparece como `Up` alguns segundos antes do banco aceitar conexão,
+e nessa janela a API tomaria erro ao subir.
 
-Coloquei healthcheck porque o container aparece como `Up` alguns segundos antes do banco aceitar
-conexão, e nessa janela a API tomaria erro ao subir. Isso resolve a inicialização, mas não o
-banco cair depois. O passo seguinte seria retry na API, que ainda não fiz.
-
-## Configuração e segredos
-
-Credenciais vêm de variáveis de ambiente, com valores padrão no `docker-compose.yml`. O projeto
-sobe com um `docker compose up` puro, sem arquivo extra, e ainda dá para trocar por credenciais
-reais sem tocar em nada versionado. O `.env.example` documenta as variáveis, o `.env` está no
+Credenciais vêm de variáveis de ambiente, com valores padrão no próprio compose. O projeto sobe
+com um `docker compose up` puro, sem arquivo extra, e ainda dá para trocar por credenciais reais
+sem tocar em nada versionado. O `.env.example` documenta as variáveis, o `.env` está no
 `.gitignore`. Em produção isso viria de um gerenciador de segredos.
+
+## O que faltou e o que faria com mais tempo
+
+**Push em tempo real.** Era item do Nível 3 e não fiz. Faria com WebSocket, mantendo a conexão
+aberta entre a API e um cliente simples, e avisando assim que uma amostra nova fosse gravada, em
+vez de o cliente ficar perguntando de tempos em tempos. O que eu pensaria antes de sair
+codificando é o que enviar, porque mandar cada amostra para a tela não seria muito útil, faria
+mais sentido enviar o resumo já contado.
+
+**Ingestão em lote.** O agente envia uma requisição por amostra, então drenar uma fila grande são
+milhares de chamadas. Um endpoint aceitando um array resolveria, mas muda o contrato e o ganho só
+aparece depois de uma queda longa.
+
+**Backoff exponencial.** Com a API fora, o agente tenta a cada cinco segundos indefinidamente. Um
+backoff com teto pouparia recurso dos dois lados.
+
+**Retry de conexão na API.** O healthcheck resolve a inicialização, mas se o banco cair depois a
+API não se recupera sozinha. Faria com a estratégia de resiliência do próprio Npgsql.
+
+**Autenticação.** Hoje qualquer um posta amostra em nome de qualquer máquina. Num cenário real
+cada agente teria uma credencial e a API validaria que o hostname enviado bate com quem está
+autenticado.
+
+**Retenção de dados.** A tabela cresce para sempre. Faria particionamento por data ou uma rotina
+que apaga amostras antigas depois de agregá-las.
 
 ## Onde usei IA
 
-Usei o Claude durante todo o desafio, principalmente para acelerar o que é repetitivo, como
-montar os projetos e escrever o P/Invoke da user32, e para discutir alternativas antes de
-decidir, tipo Minimal APIs contra Controllers ou volume nomeado contra bind mount. Em cada passo
-pedi a explicação do porquê antes do código.
+Usei o Claude durante todo o desafio, principalmente para acelerar o repetitivo, como montar os
+projetos e escrever o P/Invoke da user32, e para discutir alternativas antes de decidir, tipo
+Minimal APIs contra Controllers ou volume nomeado contra bind mount. Em cada passo pedi a
+explicação do porquê antes do código.
 
-Dois pontos onde precisei corrigir ou desconfiar:
+Dois pontos onde precisei corrigir:
 
 O primeiro foi na query do relatório. O código gerado projetava o resultado do `GroupBy` direto
-no construtor do record, que é a forma mais natural de escrever e que o EF Core 8 não consegue
-traduzir. Compilou normalmente e só quebrou quando rodei, com um `InvalidOperationException` em
-tempo de execução. A correção foi projetar para tipo anônimo, materializar e só então converter
-para o record, o que mantém a agregação no banco e faz a conversão em memória rodar sobre as
-poucas linhas já agregadas e depois disso fui nos logs conferir o SQL gerado.
+no construtor do record, que é a forma mais natural de escrever e que o EF Core 8 não traduz.
+Compilou normalmente e só quebrou quando rodei, com um `InvalidOperationException` em tempo de
+execução. Corrigi projetando para tipo anônimo, materializando e só então convertendo para o
+record, o que mantém a agregação no banco, e depois fui aos logs conferir o SQL gerado.
 
-O segundo foi mais simples mas do mesmo tipo. O comando de instalar o pacote do Npgsql sem fixar
-versão trouxe a linha 10, incompatível com o .NET 8 do projeto, e o restore falhou. Serviu de
-lembrete de que sugestão de comando também precisa ser conferida contra a versão que o projeto
-realmente usa.
+O segundo foi mais simples e do mesmo tipo. O comando de instalar o pacote do Npgsql sem fixar
+versão trouxe a linha 10, incompatível com o .NET 8 do projeto, e o restore falhou.
 
-O padrão dos dois é o mesmo, a IA acertou a intenção e errou o detalhe da versão ou da
-implementação, e os dois só apareceram porque rodei e testei em vez de confiar que estava certo.
+O padrão dos dois é o mesmo, a intenção estava certa e o detalhe da versão ou da implementação
+estava errado, e os dois só apareceram porque rodei e testei em vez de confiar que estava certo.
+Foi o que mais me marcou, com ORM principalmente, código compilar não prova nada.
