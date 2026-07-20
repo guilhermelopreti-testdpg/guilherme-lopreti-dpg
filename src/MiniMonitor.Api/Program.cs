@@ -33,5 +33,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapSampleEndpoints();
+app.MapReportEndpoints();
 
 app.Run();

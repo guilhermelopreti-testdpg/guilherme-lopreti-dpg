@@ -36,6 +36,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(e => e.WindowTitle)
                 .HasColumnName("window_title")
                 .IsRequired();
+
+            // O relatório sempre filtra por período, então esse é o predicado
+            // que vale indexar. Sem ele o Postgres varre a tabela inteira para
+            // achar as amostras da última hora.
+            entity.HasIndex(e => e.CapturedAtUtc)
+                .HasDatabaseName("ix_activity_samples_captured_at_utc");
         });
     }
 }

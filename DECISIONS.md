@@ -128,6 +128,28 @@ seria preciso rodar `dotnet dev-certs https --trust` antes. A porta está fixada
 `launchSettings.json`, que por isso vai versionado, senão o README apontaria para uma porta
 sorteada na criação do projeto.
 
+## Relatório
+
+A pergunta que o relatório responde é em quais janelas cada máquina passou o tempo num
+período. Como o agente coleta em intervalo fixo, contar amostras acaba sendo uma aproximação de
+medir tempo, a duração não é gravada em lugar nenhum, ela sai da contagem.
+
+A agregação acontece no banco, com `GROUP BY`, `COUNT`, `MIN` e `MAX`. Materializando cedo demais, a tabela inteira viria para a memória só para ser
+contada. Conferi o SQL gerado nos logs para ter certeza de que o `GROUP BY` chegou no Postgres.
+
+O total do período vem de uma consulta separada, e não da soma dos itens, porque a lista é
+cortada pelo limite. Com limite 2 os itens somariam 28 num período que tem 35 amostras.
+
+A resposta devolve o período efetivamente considerado. Sem isso, quem chama sem parâmetros não
+saberia se a última hora significa a hora cheia anterior ou os últimos sessenta minutos.
+
+O índice ficou só em `captured_at_utc`, que é o único filtro presente em toda consulta do
+relatório, já que o hostname é opcional. Um índice composto com hostname na frente seria melhor
+para as consultas filtradas por máquina e inútil para as que não filtram, porque o Postgres não
+faz busca por faixa eficiente quando a primeira coluna do índice não está restrita. Se a consulta
+por máquina virasse o padrão dominante eu acrescentaria o composto, mas índice tem custo, cada um
+deixa a escrita mais lenta, e aqui a escrita é constante.
+
 ## Postgres no Docker
 
 Volume nomeado em vez de bind mount, porque com bind mount os arquivos internos do banco cairiam
@@ -144,3 +166,27 @@ Credenciais vêm de variáveis de ambiente, com valores padrão no `docker-compo
 sobe com um `docker compose up` puro, sem arquivo extra, e ainda dá para trocar por credenciais
 reais sem tocar em nada versionado. O `.env.example` documenta as variáveis, o `.env` está no
 `.gitignore`. Em produção isso viria de um gerenciador de segredos.
+
+## Onde usei IA
+
+Usei o Claude durante todo o desafio, principalmente para acelerar o que é repetitivo, como
+montar os projetos e escrever o P/Invoke da user32, e para discutir alternativas antes de
+decidir, tipo Minimal APIs contra Controllers ou volume nomeado contra bind mount. Em cada passo
+pedi a explicação do porquê antes do código.
+
+Dois pontos onde precisei corrigir ou desconfiar:
+
+O primeiro foi na query do relatório. O código gerado projetava o resultado do `GroupBy` direto
+no construtor do record, que é a forma mais natural de escrever e que o EF Core 8 não consegue
+traduzir. Compilou normalmente e só quebrou quando rodei, com um `InvalidOperationException` em
+tempo de execução. A correção foi projetar para tipo anônimo, materializar e só então converter
+para o record, o que mantém a agregação no banco e faz a conversão em memória rodar sobre as
+poucas linhas já agregadas e depois disso fui nos logs conferir o SQL gerado.
+
+O segundo foi mais simples mas do mesmo tipo. O comando de instalar o pacote do Npgsql sem fixar
+versão trouxe a linha 10, incompatível com o .NET 8 do projeto, e o restore falhou. Serviu de
+lembrete de que sugestão de comando também precisa ser conferida contra a versão que o projeto
+realmente usa.
+
+O padrão dos dois é o mesmo, a IA acertou a intenção e errou o detalhe da versão ou da
+implementação, e os dois só apareceram porque rodei e testei em vez de confiar que estava certo.
